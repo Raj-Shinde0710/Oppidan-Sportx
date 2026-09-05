@@ -1,0 +1,310 @@
+  generator client {
+    provider = "prisma-client-js"
+  }
+
+  datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+  }
+
+  model User {
+    id           String     @id @default(uuid())
+    email        String     @unique
+    passwordHash String     @map("password_hash")
+    role         UserRole
+    status       UserStatus @default(ACTIVE)
+    createdAt    DateTime   @default(now()) @map("created_at")
+    updatedAt    DateTime?  @map("updated_at")
+    admin        Admin?
+    auditLogs    AuditLog[]
+    coach        Coach?
+
+    @@map("users")
+  }
+
+  model Admin {
+    userId  String  @id @map("user_id")
+    name    String
+    contact String?
+    user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@map("admins")
+  }
+
+  model Coach {
+    userId        String              @id @map("user_id")
+    clubName      String              @map("club_name")
+    branch        String?
+    city          String?
+    contact       String?
+    user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+    registrations EventRegistration[]
+    players       Player[]
+
+    @@map("coaches")
+  }
+
+  model Tournament {
+    id                String              @id @default(uuid())
+    name              String
+    level             String
+    venue             String
+    status            EventStatus         @default(DRAFT)
+    startDate         DateTime
+    endDate           DateTime
+    registrationOpen  DateTime
+    registrationClose DateTime
+    logoUrl           String?
+    brochureUrl       String?
+    createdAt         DateTime            @default(now())
+    categories        Category[]
+    registrations     EventRegistration[]
+    players           Player[]
+    tatamis           Tatami[]
+
+    @@map("tournaments")
+  }
+
+  model EventRegistration {
+    id           String             @id @default(uuid())
+    status       RegistrationStatus @default(PENDING)
+    registeredAt DateTime           @default(now()) @map("registered_at")
+    coachId      String             @map("coach_id")
+    tournamentId String             @map("tournament_id")
+    coach        Coach              @relation(fields: [coachId], references: [userId], onDelete: Cascade)
+    tournament   Tournament         @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+    @@unique([tournamentId, coachId])
+    @@map("event_registrations")
+  }
+
+  model Player {
+    id           String              @id @default(uuid())
+    name         String
+    gender       GenderType
+    dob          DateTime
+    weight       Decimal?
+    belt         String
+    createdAt    DateTime            @default(now()) @map("created_at")
+    coachId      String?             @map("coach_id")
+    tournamentId String              @map("tournament_id")
+    profile      ParticipantProfile?
+    kataScores   KataScore[]
+    matchesA     Match[]             @relation("PlayerA")
+    matchesB     Match[]             @relation("PlayerB")
+    coach        Coach?              @relation(fields: [coachId], references: [userId], onDelete: Cascade)
+    tournament   Tournament          @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+    @@unique([name, tournamentId], map: "players_name_tournament_unique")
+    @@map("players")
+  }
+
+  model ParticipantProfile {
+  id        String   @id @default(uuid())
+
+  name      String
+  email     String
+  phone     String
+
+  club      String?        
+
+  branch    String
+  state     String
+  city      String
+
+  playerId  String   @unique
+  createdAt DateTime @default(now())
+
+  player    Player @relation(fields:[playerId], references:[id], onDelete:Cascade)
+}
+
+  model Category {
+  id             String           @id @default(uuid())
+  name           String
+  level          String
+  minAge         Int
+  maxAge         Int
+  gender         GenderType
+  tournamentId   String
+  playersPerPool Int
+  type           CategoryType
+
+  // NEW
+  sortByBelt     Boolean @default(false)
+
+  createdAt      DateTime @default(now())
+
+  tournament     Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  weights        CategoryWeight[]
+
+  pools          Pool[]
+
+  @@map("categories")
+}
+
+  model CategoryWeight {
+    id         String   @id @default(uuid())
+    minWeight  Int
+    maxWeight  Int
+    categoryId String
+    category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+    @@map("category_weights")
+  }
+
+  model Pool {
+  id         String      @id @default(uuid())
+  name       String
+  categoryId String
+  aiGroupKey String?
+
+  // NEW: assigned tatami
+  tatamiId   String?
+  tatami     Tatami?     @relation(fields: [tatamiId], references: [id], onDelete: SetNull)
+
+  kataScores KataScore[]
+  matches    Match[]
+  category   Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@map("pools")
+}
+
+  model Match {
+    id        String         @id @default(uuid())
+    poolId    String
+    tatami    Int
+    round     Int
+    playerAId String
+    playerBId String
+    referees  MatchReferee[]
+    playerA   Player         @relation("PlayerA", fields: [playerAId], references: [id])
+    playerB   Player         @relation("PlayerB", fields: [playerBId], references: [id])
+    pool      Pool           @relation(fields: [poolId], references: [id], onDelete: Cascade)
+    scoreCard ScoreCard?
+
+    @@map("matches")
+  }
+
+  model ScoreCard {
+    id       String            @id @default(uuid())
+    matchId  String            @unique
+    scoreA   Int
+    scoreB   Int
+    method   MatchResultMethod
+    winnerId String
+    match    Match             @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+    @@map("scorecards")
+  }
+
+  model Referee {
+    id          String         @id @default(uuid())
+    name        String         @unique
+    assignments MatchReferee[]
+
+    @@map("referees")
+  }
+
+  model MatchReferee {
+    matchId   String
+    refereeId String
+    match     Match   @relation(fields: [matchId], references: [id], onDelete: Cascade)
+    referee   Referee @relation(fields: [refereeId], references: [id], onDelete: Cascade)
+
+    @@id([matchId, refereeId])
+    @@map("match_referees")
+  }
+
+  model AuditLog {
+    id        String   @id @default(uuid())
+    action    String
+    entity    String?
+    entityId  String?  @map("entity_id")
+    createdAt DateTime @default(now()) @map("created_at")
+    userId    String?  @map("user_id")
+    user      User?    @relation(fields: [userId], references: [id])
+
+    @@map("audit_logs")
+  }
+
+  model SystemError {
+    id         String   @id @default(uuid())
+    errorType  String   @map("error_type")
+    message    String
+    stackTrace String?  @map("stack_trace")
+    reportedAt DateTime @default(now()) @map("reported_at")
+
+    @@map("system_errors")
+  }
+
+  model Tatami {
+  id           String     @id @default(dbgenerated("(gen_random_uuid())::text"))
+  number       Int
+  tournamentId String
+  createdAt    DateTime   @default(now()) @map("created_at")
+  passwordHash String     @map("password_hash")
+  username     String
+
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  // NEW
+  pools        Pool[]
+
+  @@unique([number, tournamentId], map: "tatamis_unique_per_tournament")
+  @@unique([username, tournamentId])
+
+  @@map("tatamis")
+}
+
+  model KataScore {
+    id         String @id @default(uuid())  
+    poolId     String
+    playerId   String
+    scores     Json
+    finalScore Float
+    player     Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+    pool       Pool   @relation(fields: [poolId], references: [id], onDelete: Cascade)
+
+    @@map("kata_scores")
+  }
+
+  enum UserRole {
+    SUPERADMIN
+    ADMIN
+    COACH
+  }
+
+  enum UserStatus {
+    ACTIVE
+    BLOCKED
+  }
+
+  enum EventStatus {
+    DRAFT
+    OPEN
+    CLOSED
+  }
+
+  enum RegistrationStatus {
+    PENDING
+    APPROVED
+    REJECTED
+  }
+
+  enum GenderType {
+    MALE
+    FEMALE
+    BOTH
+  }
+
+  enum MatchResultMethod {
+    REGULATION
+    GOLDEN_POINT
+    WALKOVER
+  }
+
+  enum CategoryType {
+    KATA
+    KUMITE
+  }
