@@ -37,3 +37,22 @@ export const deleteTatami = async (tatamiId) => {
 
   return res.data;
 };
+
+// ============================================================
+// MANUAL ASSIGN CATEGORY TO TATAMI
+// ============================================================
+
+export const assignCategoryManually = async (
+  categoryId,
+  tatamiId
+) => {
+  const res = await axios.post(
+    `${BASE_URL}/assign-category`,
+    {
+      categoryId,
+      tatamiId,
+    }
+  );
+
+  return res.data;
+};

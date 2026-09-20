@@ -7,7 +7,6 @@ import {
   Info,
   Zap,
   Table as TableIcon,
-  Users,
   Weight,
   CalendarDays,
   VenusAndMars,
@@ -16,7 +15,11 @@ import {
 } from "lucide-react";
 
 import { getAllTournaments } from "../api/tournaments";
-import { getTatamisByTournament, assignPoolsToTatamis } from "../api/tatami";
+import {
+  getTatamisByTournament,
+  assignPoolsToTatamis,
+  assignCategoryManually,
+} from "../api/tatami";
 import { getAllReferees } from "../api/referees";
 import { getPoolData } from "../api/pools";
 
@@ -58,6 +61,13 @@ const AssignmentForm = () => {
   const [loadingData, setLoadingData] = useState(false);
   const [assigning, setAssigning] = useState(false);
 
+  const [assignmentType, setAssignmentType] = useState("AUTO");
+
+const [selectedCategoryId, setSelectedCategoryId] = useState("");
+const [selectedTatamiId, setSelectedTatamiId] = useState("");
+const [manualAssigning, setManualAssigning] = useState(false);
+
+const [categories, setCategories] = useState([]);
   // ============================================================
   // LOAD ALL TOURNAMENTS
   // ============================================================
@@ -135,30 +145,68 @@ const AssignmentForm = () => {
         // }
         // --------------------------------------------------------
 
-        const categories = Array.isArray(poolData?.categories)
-          ? poolData.categories
-          : [];
+        const tournamentCategories = Array.isArray(
+  poolData?.categories
+)
+  ? poolData.categories
+  : [];
+
+setCategories(tournamentCategories);
 
         const flattenedPools = [];
 
-        categories.forEach((category) => {
-          const categoryPools = Array.isArray(category?.pools)
-            ? category.pools
-            : [];
+tournamentCategories.forEach((category) => {
+  const categoryPools = Array.isArray(category?.pools)
+    ? category.pools
+    : [];
 
-          categoryPools.forEach((pool) => {
-            flattenedPools.push({
-              ...pool,
-              categoryName:
-                category?.name ||
-                category?.categoryName ||
-                "Unknown Category",
-            });
-          });
-        });
+  categoryPools.forEach((pool) => {
+    flattenedPools.push({
+      ...pool,
 
-        setPools(flattenedPools);
+      categoryName:
+        category?.name ||
+        category?.categoryName ||
+        "Unknown Category",
 
+      category,
+    });
+  });
+});
+
+setPools(flattenedPools);
+
+const existingAssignments =
+  tournamentCategories
+    .filter((category) => category.tatamiId)
+    .map((category) => {
+      const tatami = tatamiList.find(
+        (item) =>
+          item.id === category.tatamiId
+      );
+
+      return {
+        categoryId: category.id,
+        categoryName: category.name,
+
+        tatamiId: category.tatamiId,
+        tatamiNumber: tatami?.number,
+
+        gender: category.gender,
+
+        minAge: category.minAge,
+        maxAge: category.maxAge,
+
+        totalPools:
+          category.pools?.length || 0,
+
+        pools:
+          category.pools || [],
+      };
+    });
+
+setAssignments(existingAssignments);
+setIsAssigned(existingAssignments.length > 0);
         // --------------------------------------------------------
         // REFEREES
         // --------------------------------------------------------
@@ -189,54 +237,246 @@ const AssignmentForm = () => {
   // ============================================================
 
   const handleAssign = async () => {
-    if (!selectedTournamentId) {
-      alert("Please select a tournament.");
-      return;
-    }
+  if (!selectedTournamentId) {
+    alert("Please select a tournament.");
+    return;
+  }
 
-    if (tatamis.length === 0) {
-      alert("No Tatamis have been created for this tournament.");
-      return;
-    }
+  if (tatamis.length === 0) {
+    alert("No Tatamis have been created for this tournament.");
+    return;
+  }
 
-    if (pools.length === 0) {
-      alert("No pools have been generated for this tournament.");
-      return;
-    }
+  if (pools.length === 0) {
+    alert("No pools have been generated for this tournament.");
+    return;
+  }
 
-    try {
-      setAssigning(true);
+  try {
+    setAssigning(true);
 
-      const result = await assignPoolsToTatamis(
-        selectedTournamentId,
-        mode,
-        sequence
-      );
+    // --------------------------------------------------------
+    // ASSIGN CATEGORIES TO TATAMIS
+    // --------------------------------------------------------
 
-      console.log("Pool assignment result:", result);
+    const result = await assignPoolsToTatamis(
+      selectedTournamentId,
+      mode,
+      sequence
+    );
 
-      const resultAssignments = Array.isArray(result?.assignments)
-        ? result.assignments
+    console.log("Category assignment result:", result);
+
+    // --------------------------------------------------------
+    // RE-FETCH POOL DATA
+    // This gives us complete category/pool/match/player data
+    // after the Tatami assignment has been saved.
+    // --------------------------------------------------------
+
+    const refreshedPoolData = await getPoolData(
+      selectedTournamentId
+    );
+
+    const refreshedCategories = Array.isArray(
+      refreshedPoolData?.categories
+    )
+      ? refreshedPoolData.categories
+      : [];
+
+    // Update categories state
+    setCategories(refreshedCategories);
+
+    // --------------------------------------------------------
+    // FLATTEN POOLS
+    // --------------------------------------------------------
+
+    const refreshedPools = [];
+
+    refreshedCategories.forEach((category) => {
+      const categoryPools = Array.isArray(category?.pools)
+        ? category.pools
         : [];
 
-      setAssignments(resultAssignments);
-      setIsAssigned(true);
+      categoryPools.forEach((pool) => {
+        refreshedPools.push({
+          ...pool,
+          categoryName:
+            category?.name ||
+            category?.categoryName ||
+            "Unknown Category",
+          category,
+        });
+      });
+    });
 
-      alert(
-        `Successfully assigned ${result?.totalPools ?? resultAssignments.length} pools to ${result?.totalTatamis ?? tatamis.length} Tatamis.`
-      );
-    } catch (error) {
-      console.error("Pool assignment failed:", error);
+    setPools(refreshedPools);
 
-      alert(
-        error?.response?.data?.message ||
-          error?.message ||
-          "Failed to assign pools."
-      );
-    } finally {
-      setAssigning(false);
+    // --------------------------------------------------------
+    // BUILD ASSIGNMENTS FROM FRESH DATABASE DATA
+    // --------------------------------------------------------
+
+    const refreshedAssignments = refreshedCategories
+      .filter((category) => category.tatamiId)
+      .map((category) => {
+        const tatami = tatamis.find(
+          (item) => item.id === category.tatamiId
+        );
+
+        return {
+          categoryId: category.id,
+          categoryName: category.name,
+
+          tatamiId: category.tatamiId,
+          tatamiNumber: tatami?.number,
+
+          gender: category.gender,
+
+          minAge: category.minAge,
+          maxAge: category.maxAge,
+
+          totalPools: category.pools?.length || 0,
+
+          // IMPORTANT:
+          // These pools contain the match/player information
+          // required for athlete counting.
+          pools: category.pools || [],
+        };
+      });
+
+    console.log(
+      "Refreshed category assignments:",
+      refreshedAssignments
+    );
+
+    setAssignments(refreshedAssignments);
+    setIsAssigned(refreshedAssignments.length > 0);
+
+    // --------------------------------------------------------
+    // CORRECT TOTALS
+    // --------------------------------------------------------
+
+    const totalAssignedPools = refreshedAssignments.reduce(
+      (total, category) =>
+        total + (category.totalPools || 0),
+      0
+    );
+
+    alert(
+      `Successfully assigned ${totalAssignedPools} pools to ${tatamis.length} Tatamis.`
+    );
+
+  } catch (error) {
+    console.error(
+      "Category assignment failed:",
+      error
+    );
+
+    alert(
+      error?.response?.data?.message ||
+        error?.message ||
+        "Failed to assign categories."
+    );
+  } finally {
+    setAssigning(false);
+  }
+};
+  const handleManualAssign = async () => {
+  if (!selectedTournamentId) {
+    alert("Please select a tournament.");
+    return;
+  }
+
+  if (!selectedCategoryId) {
+    alert("Please select a category.");
+    return;
+  }
+
+  if (!selectedTatamiId) {
+    alert("Please select a Tatami.");
+    return;
+  }
+
+  try {
+    setManualAssigning(true);
+
+    const result = await assignCategoryManually(
+      selectedCategoryId,
+      selectedTatamiId
+    );
+
+    console.log(
+      "Manual category assignment result:",
+      result
+    );
+
+    const selectedCategory = categories.find(
+      (category) =>
+        category.id === selectedCategoryId
+    );
+
+    const selectedTatami = tatamis.find(
+      (tatami) =>
+        tatami.id === selectedTatamiId
+    );
+
+    if (selectedCategory && selectedTatami) {
+      const categoryAssignment = {
+        categoryId: selectedCategory.id,
+        categoryName: selectedCategory.name,
+
+        tatamiId: selectedTatami.id,
+        tatamiNumber: selectedTatami.number,
+
+        gender: selectedCategory.gender,
+
+        minAge: selectedCategory.minAge,
+        maxAge: selectedCategory.maxAge,
+
+        totalPools:
+          selectedCategory.pools?.length || 0,
+
+        pools:
+          selectedCategory.pools || [],
+      };
+
+      setAssignments((prev) => {
+        const filtered = prev.filter(
+          (assignment) =>
+            assignment.categoryId !==
+            selectedCategory.id
+        );
+
+        return [
+          ...filtered,
+          categoryAssignment,
+        ];
+      });
     }
-  };
+
+    setIsAssigned(true);
+
+    alert(
+      result?.message ||
+        "Category assigned successfully."
+    );
+
+    setSelectedCategoryId("");
+    setSelectedTatamiId("");
+  } catch (error) {
+    console.error(
+      "Manual category assignment failed:",
+      error
+    );
+
+    alert(
+      error?.response?.data?.message ||
+        error?.message ||
+        "Failed to assign category."
+    );
+  } finally {
+    setManualAssigning(false);
+  }
+};
 
   // ============================================================
   // ANIMATION VARIANTS
@@ -338,6 +578,102 @@ const formatAge = (minAge, maxAge) => {
   return `${minAge}–${maxAge} Years`;
 };
 
+const getPoolWeightRange = (pool) => {
+  if (!pool) {
+    return {
+      minWeight: null,
+      maxWeight: null,
+    };
+  }
+
+
+  const getPoolWeightValue = (pool) => {
+  const {
+    minWeight,
+    maxWeight,
+  } = getPoolWeightRange(pool);
+
+  if (
+    minWeight !== null &&
+    minWeight !== undefined
+  ) {
+    return Number(minWeight);
+  }
+
+  if (
+    maxWeight !== null &&
+    maxWeight !== undefined
+  ) {
+    return Number(maxWeight);
+  }
+
+  return Number.POSITIVE_INFINITY;
+};
+
+
+  // If the API already provides weight values
+  if (
+    pool.minWeight !== undefined &&
+    pool.minWeight !== null &&
+    pool.maxWeight !== undefined &&
+    pool.maxWeight !== null
+  ) {
+    return {
+      minWeight: pool.minWeight,
+      maxWeight: pool.maxWeight,
+    };
+  }
+
+  // Otherwise extract from aiGroupKey
+  // Example:
+  // MALE | 7-7 | 36-40
+  // MALE | 7-7 | 51-80
+  if (pool.aiGroupKey) {
+    const parts = pool.aiGroupKey
+      .split("|")
+      .map((part) => part.trim());
+
+    const weightPart = parts[parts.length - 1];
+
+    const match = weightPart?.match(
+      /^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$/
+    );
+
+    if (match) {
+      return {
+        minWeight: Number(match[1]),
+        maxWeight: Number(match[2]),
+      };
+    }
+  }
+
+  return {
+    minWeight: null,
+    maxWeight: null,
+  };
+};
+
+const getPoolWeightValue = (pool) => {
+  const { minWeight, maxWeight } =
+    getPoolWeightRange(pool);
+
+  if (
+    minWeight !== null &&
+    minWeight !== undefined
+  ) {
+    return Number(minWeight);
+  }
+
+  if (
+    maxWeight !== null &&
+    maxWeight !== undefined
+  ) {
+    return Number(maxWeight);
+  }
+
+  return Number.POSITIVE_INFINITY;
+};
+
 const formatWeight = (assignment) => {
   if (!assignment) {
     return "Weight not available";
@@ -359,7 +695,7 @@ const formatWeight = (assignment) => {
 };
 
 const groupedTatamis = tatamis.map((tatami) => {
-  const tatamiAssignments = assignments.filter(
+  const tatamiCategories = assignments.filter(
     (assignment) =>
       assignment.tatamiId === tatami.id ||
       assignment.tatamiNumber === tatami.number
@@ -367,7 +703,7 @@ const groupedTatamis = tatamis.map((tatami) => {
 
   return {
     ...tatami,
-    assignments: tatamiAssignments,
+    categories: tatamiCategories,
   };
 });
 
@@ -527,6 +863,124 @@ const groupedTatamis = tatamis.map((tatami) => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
 
+
+{/* ====================================================
+    AUTO / MANUAL ASSIGNMENT
+==================================================== */}
+
+<motion.div
+  variants={itemVariants}
+  className="bg-white/30 p-6 rounded-[2rem] border border-white/40 shadow-sm"
+>
+  <label className="block text-[11px] font-black uppercase tracking-widest text-[#3f4191] mb-4">
+    Assignment Type
+  </label>
+
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+    <button
+      type="button"
+      onClick={() => setAssignmentType("AUTO")}
+      className={`
+        p-4 rounded-2xl border-2 font-black uppercase tracking-widest
+        transition-all
+        ${
+          assignmentType === "AUTO"
+            ? "bg-[#3f4191] text-white border-[#3f4191] shadow-lg"
+            : "bg-white/70 text-slate-500 border-slate-200 hover:border-[#3f4191]"
+        }
+      `}
+    >
+      Auto Assign
+    </button>
+
+    <button
+      type="button"
+      onClick={() => setAssignmentType("MANUAL")}
+      className={`
+        p-4 rounded-2xl border-2 font-black uppercase tracking-widest
+        transition-all
+        ${
+          assignmentType === "MANUAL"
+            ? "bg-[#3f4191] text-white border-[#3f4191] shadow-lg"
+            : "bg-white/70 text-slate-500 border-slate-200 hover:border-[#3f4191]"
+        }
+      `}
+    >
+      Manual Assign
+    </button>
+
+  </div>
+</motion.div>
+{assignmentType === "MANUAL" && (
+  <motion.div
+    initial={{ opacity: 0, y: 10 }}
+    animate={{ opacity: 1, y: 0 }}
+    className="bg-white/30 p-6 rounded-[2rem] border border-white/40 shadow-sm"
+  >
+    <label className="block text-[11px] font-black uppercase tracking-widest text-[#3f4191] mb-4">
+      Select Category
+    </label>
+
+    <select
+      value={selectedCategoryId}
+      onChange={(e) =>
+        setSelectedCategoryId(e.target.value)
+      }
+      className="w-full bg-white/70 border border-slate-200 rounded-2xl p-4 text-base font-bold text-[#1e266d] outline-none"
+      disabled={
+        loadingData || categories.length === 0
+      }
+    >
+      <option value="">
+        Select Category
+      </option>
+
+      {categories.map((category) => (
+        <option
+          key={category.id}
+          value={category.id}
+        >
+          {category.name} — {category.gender} —{" "}
+          {category.minAge === category.maxAge
+            ? `${category.minAge} Years`
+            : `${category.minAge}–${category.maxAge} Years`}
+        </option>
+      ))}
+    </select>
+
+    <label className="block text-[11px] font-black uppercase tracking-widest text-[#3f4191] mb-4 mt-6">
+      Select Tatami
+    </label>
+
+    <select
+      value={selectedTatamiId}
+      onChange={(e) =>
+        setSelectedTatamiId(e.target.value)
+      }
+      className="w-full bg-white/70 border border-slate-200 rounded-2xl p-4 text-base font-bold text-[#1e266d] outline-none"
+      disabled={
+        loadingData || tatamis.length === 0
+      }
+    >
+      <option value="">
+        Select Tatami
+      </option>
+
+      {tatamis.map((tatami) => (
+        <option
+          key={tatami.id}
+          value={tatami.id}
+        >
+          Tatami {tatami.number}
+        </option>
+      ))}
+    </select>
+  </motion.div>
+)}
+
+{assignmentType === "AUTO" && (
+  <>
             {/* BOYS / GIRLS / MIX */}
 
             <motion.div
@@ -534,7 +988,7 @@ const groupedTatamis = tatamis.map((tatami) => {
               className="bg-white/30 p-6 rounded-[2rem] border border-white/40 shadow-sm"
             >
               <label className="block text-[11px] font-black uppercase tracking-widest text-[#3f4191] mb-4">
-                Assign Pools To
+                AAssign Categories To
               </label>
 
               <select
@@ -555,7 +1009,7 @@ const groupedTatamis = tatamis.map((tatami) => {
               className="bg-white/30 p-6 rounded-[2rem] border border-white/40 shadow-sm"
             >
               <label className="block text-[11px] font-black uppercase tracking-widest text-[#3f4191] mb-4">
-                Pool Sequence
+                Category Sequence
               </label>
 
               <select
@@ -573,8 +1027,9 @@ const groupedTatamis = tatamis.map((tatami) => {
               </select>
             </motion.div>
 
-          </div>
-
+  </>
+)}
+</div>
           {/* INFO */}
 
           <motion.div
@@ -615,22 +1070,46 @@ const groupedTatamis = tatamis.map((tatami) => {
           </div>
 
           <motion.button
-            onClick={handleAssign}
-            disabled={
-              assigning ||
-              loadingData ||
-              !selectedTournamentId ||
-              tatamis.length === 0 ||
-              pools.length === 0
-            }
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className="bg-[#3f4191] disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-14 py-4 rounded-[1.5rem] text-sm font-black uppercase tracking-[0.2em] shadow-2xl flex items-center gap-3 transition-all"
-          >
-            {assigning ? "Assigning..." : "Assign"}
+  onClick={
+    assignmentType === "AUTO"
+      ? handleAssign
+      : handleManualAssign
+  }
+  disabled={
+    assignmentType === "AUTO"
+      ? (
+          assigning ||
+          loadingData ||
+          !selectedTournamentId ||
+          tatamis.length === 0 ||
+          pools.length === 0
+        )
+      : (
+          manualAssigning ||
+          loadingData ||
+          !selectedTournamentId ||
+          !selectedCategoryId ||
+          !selectedTatamiId
+        )
+  }
+  whileHover={{ scale: 1.05 }}
+  whileTap={{ scale: 0.95 }}
+  className="bg-[#3f4191] disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-14 py-4 rounded-[1.5rem] text-sm font-black uppercase tracking-[0.2em] shadow-2xl flex items-center gap-3 transition-all"
+>
+  {assignmentType === "AUTO"
+    ? assigning
+      ? "Assigning..."
+      : "Auto Assign"
+    : manualAssigning
+  ? "Assigning..."
+  : "Assign Category"
+  }
 
-            {!assigning && <ChevronRight size={20} />}
-          </motion.button>
+  {!assigning &&
+    !manualAssigning && (
+      <ChevronRight size={20} />
+    )}
+</motion.button>
 
         </div>
 
@@ -670,8 +1149,12 @@ const groupedTatamis = tatamis.map((tatami) => {
         </h2>
 
         <p className="text-sm text-slate-500 mt-2">
-          {assignments.length} pools assigned successfully.
-        </p>
+  {assignments.reduce(
+    (total, category) =>
+      total + (category.totalPools || 0),
+    0
+  )} pools across {assignments.length} categories assigned successfully.
+</p>
       </div>
 
       {/* TATAMI CARDS */}
@@ -681,30 +1164,41 @@ const groupedTatamis = tatamis.map((tatami) => {
           const colors =
             tatamiColors[index % tatamiColors.length];
 
-          const totalPools =
-            tatami.assignments.length;
+          const totalCategories =
+  tatami.categories.length;
 
-          const totalAthletes =
-  tatami.assignments.reduce(
-    (total, assignment) => {
-      const pool = pools.find(
-        (p) => p.id === assignment.poolId
-      );
+const totalPools =
+  tatami.categories.reduce(
+    (total, category) =>
+      total + (category.totalPools || 0),
+    0
+  );
 
-      if (!pool?.matches) {
-        return total;
-      }
+  const totalAthletes =
+  tatami.categories.reduce(
+    (total, categoryAssignment) => {
+      const categoryPools = Array.isArray(
+        categoryAssignment.pools
+      )
+        ? categoryAssignment.pools
+        : [];
 
       const athleteIds = new Set();
 
-      pool.matches.forEach((match) => {
-        if (match.playerA?.id) {
-          athleteIds.add(match.playerA.id);
+      categoryPools.forEach((pool) => {
+        if (!pool?.matches) {
+          return;
         }
 
-        if (match.playerB?.id) {
-          athleteIds.add(match.playerB.id);
-        }
+        pool.matches.forEach((match) => {
+          if (match.playerA?.id) {
+            athleteIds.add(match.playerA.id);
+          }
+
+          if (match.playerB?.id) {
+            athleteIds.add(match.playerB.id);
+          }
+        });
       });
 
       return total + athleteIds.size;
@@ -848,7 +1342,7 @@ const groupedTatamis = tatamis.map((tatami) => {
 
               <div className="px-6 pb-6">
 
-                {tatami.assignments.length === 0 ? (
+                {tatami.categories.length === 0 ? (
 
                   <div className="bg-slate-50 rounded-2xl p-6 text-center">
                     <p className="text-sm font-semibold text-slate-400">
@@ -858,129 +1352,97 @@ const groupedTatamis = tatamis.map((tatami) => {
 
                 ) : (
 
-                  <div className="space-y-4">
+<div className="space-y-4">
+  {[...(tatami.categories || [])]
+    .sort((a, b) => {
+      if (a.minAge !== b.minAge) {
+        return a.minAge - b.minAge;
+      }
 
-                    {tatami.assignments.map(
-                      (assignment) => {
+      if (a.maxAge !== b.maxAge) {
+        return a.maxAge - b.maxAge;
+      }
 
-                        const pool = pools.find(
-                          (p) =>
-                            p.id === assignment.poolId
-                        );
+      return a.categoryName.localeCompare(
+        b.categoryName
+      );
+    })
+    .map((categoryAssignment) => (
+      <div
+        key={categoryAssignment.categoryId}
+        className={`
+          border
+          rounded-2xl
+          p-5
+          ${colors.pool}
+        `}
+      
+    >
+      {/* CATEGORY HEADER */}
 
-                        return (
-                          <div
-                            key={assignment.poolId}
-                            className={`
-                              border
-                              rounded-2xl
-                              p-5
-                              ${colors.pool}
-                            `}
-                          >
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <p
+            className={`
+              text-xl
+              font-black
+              ${colors.accent}
+            `}
+          >
+            {categoryAssignment.categoryName}
+          </p>
 
-                            {/* POOL TITLE */}
+          <p className="text-xs text-slate-400 font-semibold mt-1">
+            {categoryAssignment.gender} •{" "}
+            {formatAge(
+              categoryAssignment.minAge,
+              categoryAssignment.maxAge
+            )}
+          </p>
+        </div>
 
-                            <div className="flex items-center justify-between mb-4">
+        <span className="text-xs font-bold bg-white px-3 py-1.5 rounded-full text-slate-500 border border-slate-100">
+          {categoryAssignment.totalPools} Pools
+        </span>
+      </div>
 
-                              <div>
+      {/* POOLS INSIDE CATEGORY */}
 
-                                <p
-                                  className={`
-                                    text-lg
-                                    font-black
-                                    ${colors.accent}
-                                  `}
-                                >
-                                  {assignment.poolName}
-                                </p>
+<div className="space-y-3">
+  {[...(categoryAssignment.pools || [])]
+    .sort(
+      (a, b) =>
+        getPoolWeightValue(a) -
+        getPoolWeightValue(b)
+    )
+    .map((pool, poolIndex) => (
+      <div
+        key={pool.id}
+        className="bg-white rounded-xl p-4 border border-slate-100"
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-black text-[#1e266d]">
+              Pool {poolIndex + 1}
+            </p>
 
-                                <p className="text-xs text-slate-400 font-semibold mt-1">
-                                  {assignment.categoryName}
-                                </p>
+            {pool.aiGroupKey && (
+              <p className="text-xs text-slate-400 mt-1">
+                {pool.aiGroupKey}
+              </p>
+            )}
+          </div>
 
-                              </div>
-
-                              <span className="text-xs font-bold bg-white px-3 py-1.5 rounded-full text-slate-500 border border-slate-100">
-                                Assigned
-                              </span>
-
-                            </div>
-
-                            {/* DETAILS */}
-
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-
-                              {/* AGE */}
-
-                              <div className="bg-white rounded-xl p-3 border border-white/80">
-
-                                <div className="flex items-center gap-2 text-slate-400">
-
-                                  <CalendarDays size={15} />
-
-                                  <span className="text-[9px] uppercase tracking-widest font-black">
-                                    Age
-                                  </span>
-
-                                </div>
-
-                                <p className="text-sm font-black text-[#1e266d] mt-1">
-                                  {formatAge(
-                                    assignment.minAge,
-                                    assignment.maxAge
-                                  )}
-                                </p>
-
-                              </div>
-
-                              {/* WEIGHT */}
-
-                              <div className="bg-white rounded-xl p-3 border border-white/80">
-
-                                <div className="flex items-center gap-2 text-slate-400">
-
-                                  <Weight size={15} />
-
-                                  <span className="text-[9px] uppercase tracking-widest font-black">
-                                    Weight
-                                  </span>
-
-                                </div>
-
-                                <p className="text-sm font-black text-[#1e266d] mt-1">
-                                  {formatWeight(assignment)}
-                                </p>
-
-                              </div>
-
-                              {/* GENDER */}
-
-                              <div className="bg-white rounded-xl p-3 border border-white/80">
-
-                                <div className="flex items-center gap-2 text-slate-400">
-
-                                  <VenusAndMars size={15} />
-
-                                  <span className="text-[9px] uppercase tracking-widest font-black">
-                                    Gender
-                                  </span>
-
-                                </div>
-
-                                <p className="text-sm font-black text-[#1e266d] mt-1">
-                                  {assignment.gender || "—"}
-                                </p>
-
-                              </div>
-
-                            </div>
-
-                          </div>
-                        );
-                      }
-                    )}
-
+          <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">
+            Pool
+          </span>
+        </div>
+      </div>
+    ))}
+</div>
+    </div>
+  )
+)}
                   </div>
 
                 )}

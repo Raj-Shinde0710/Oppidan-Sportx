@@ -42,6 +42,20 @@ export class TatamiController {
     );
   }
 
+// ============================================================
+// MANUAL ASSIGN CATEGORY TO TATAMI
+// ============================================================
+@Post("assign-category")
+assignCategoryManually(
+  @Body("categoryId") categoryId: string,
+  @Body("tatamiId") tatamiId: string,
+) {
+  return this.tatamiService.assignCategoryManually(
+    categoryId,
+    tatamiId,
+  );
+}
+
   @Delete(":id")
 deleteTatami(@Param("id") id: string) {
   return this.tatamiService.deleteTatami(id);

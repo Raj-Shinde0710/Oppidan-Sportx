@@ -149,236 +149,382 @@ export class TatamiService {
       },
     });
   }
-    // ============================================================
-  // ASSIGN ALL POOLS TO TATAMIS
+ async assignPoolsToTatamis(
+  tournamentId: string,
+  mode: "BOYS" | "GIRLS" | "MIX" = "MIX",
+  sequence: "SENIOR_FIRST" | "JUNIOR_FIRST" = "JUNIOR_FIRST",
+) {
   // ============================================================
-  async assignPoolsToTatamis(
-    tournamentId: string,
-    mode: "BOYS" | "GIRLS" | "MIX" = "MIX",
-    sequence: "SENIOR_FIRST" | "JUNIOR_FIRST" = "SENIOR_FIRST",
-  ) {
-    // ----------------------------------------------------------
-    // 1. Get tournament
-    // ----------------------------------------------------------
-    const tournament = await this.prisma.tournament.findUnique({
-      where: { id: tournamentId },
-    });
+  // 1. CHECK TOURNAMENT
+  // ============================================================
 
-    if (!tournament) {
-      throw new BadRequestException("Tournament not found");
-    }
+  const tournament = await this.prisma.tournament.findUnique({
+    where: {
+      id: tournamentId,
+    },
+  });
 
-    // ----------------------------------------------------------
-    // 2. Get all Tatamis for this tournament
-    // ----------------------------------------------------------
-    const tatamis = await this.prisma.tatami.findMany({
-      where: { tournamentId },
-      orderBy: { number: "asc" },
-    });
+  if (!tournament) {
+    throw new BadRequestException("Tournament not found");
+  }
 
-    if (tatamis.length === 0) {
-      throw new BadRequestException(
-        "No Tatamis have been created for this tournament",
-      );
-    }
+  // ============================================================
+  // 2. GET TATAMIS
+  // ============================================================
 
-    // ----------------------------------------------------------
-    // 3. Get ALL pools belonging to this tournament
-    //
-    // Pool -> Category -> Tournament
-    // ----------------------------------------------------------
-    const pools = await this.prisma.pool.findMany({
-  where: {
-    category: {
+  const tatamis = await this.prisma.tatami.findMany({
+    where: {
       tournamentId,
     },
-  },
-  include: {
-    category: {
-      include: {
-        weights: true,
-      },
+    orderBy: {
+      number: "asc",
     },
-    matches: {
-      include: {
-        playerA: true,
-        playerB: true,
-      },
+  });
+
+  if (tatamis.length === 0) {
+    throw new BadRequestException(
+      "No Tatamis have been created for this tournament.",
+    );
+  }
+
+  // ============================================================
+  // 3. GET CATEGORIES
+  // ============================================================
+
+  let categories = await this.prisma.category.findMany({
+    where: {
+      tournamentId,
     },
-  },
-  orderBy: {
-    name: "asc",
-  },
+    include: {
+      pools: true,
+    },
+  });
+
+  // ============================================================
+  // 4. FILTER BY GENDER MODE
+  // ============================================================
+
+  if (mode === "BOYS") {
+    categories = categories.filter(
+      (category) => category.gender === "MALE",
+    );
+  }
+
+  if (mode === "GIRLS") {
+    categories = categories.filter(
+      (category) => category.gender === "FEMALE",
+    );
+  }
+
+  if (categories.length === 0) {
+    throw new BadRequestException(
+      "No categories found for the selected mode.",
+    );
+  }
+
+  // ============================================================
+  // 5. SORT CATEGORIES BY AGE
+  //
+  // IMPORTANT:
+  // Youngest category first.
+  //
+  // Example:
+  // 6 → 7 → 8 → 9 → 10 → 11 → 12
+  // ============================================================
+
+  categories.sort((a, b) => {
+  // Youngest category first
+  if (a.minAge !== b.minAge) {
+    return a.minAge - b.minAge;
+  }
+
+  if (a.maxAge !== b.maxAge) {
+    return a.maxAge - b.maxAge;
+  }
+
+  return a.name.localeCompare(b.name);
 });
 
-    if (pools.length === 0) {
-      throw new BadRequestException(
-        "No pools have been generated for this tournament",
-      );
-    }
+  // ============================================================
+  // 6. TOTAL POOLS + TARGET
+  // ============================================================
 
-    // ----------------------------------------------------------
-    // 4. Sort pools
+  const totalPools = categories.reduce(
+    (sum, category) =>
+      sum + (category.pools?.length || 0),
+    0,
+  );
+
+  
+
+  // ============================================================
+// 7. ASSIGN CATEGORIES TO TATAMIS
+//
+// RULE:
+//
+// FIRST ROUND:
+//   Category 1 → Tatami 1
+//   Category 2 → Tatami 2
+//   Category 3 → Tatami 3
+//   Category 4 → Tatami 4
+//
+// AFTER EVERY TATAMI HAS ONE CATEGORY:
+//
+//   Find Tatami with the least number of pools.
+//   Assign the COMPLETE next category to it.
+//
+// CATEGORY IS NEVER SPLIT.
+// ============================================================
+
+const loads = tatamis.map((tatami) => ({
+  tatamiId: tatami.id,
+  tatamiNumber: tatami.number,
+  categories: [] as any[],
+  poolCount: 0,
+}));
+
+for (let index = 0; index < categories.length; index++) {
+  const category = categories[index];
+
+  const categoryPoolCount =
+    category.pools?.length || 0;
+
+  let target;
+
+  // ==========================================================
+  // FIRST ROUND
+  //
+  // Youngest category goes to Tatami 1,
+  // second youngest to Tatami 2, etc.
+  // ==========================================================
+
+  if (index < tatamis.length) {
+    target = loads[index];
+  } else {
+    // ========================================================
+    // AFTER EVERY TATAMI HAS RECEIVED A CATEGORY
     //
-    // We use the category's age range and gender.
-    // ----------------------------------------------------------
-    const getGenderOrder = (gender: string) => {
-      if (mode === "BOYS") {
-        return gender === "MALE" ? 0 : 999;
+    // Find the Tatami with the least number of pools.
+    //
+    // If there is a tie, choose the lower Tatami number.
+    // ========================================================
+
+    target = [...loads].sort((a, b) => {
+      if (a.poolCount !== b.poolCount) {
+        return a.poolCount - b.poolCount;
       }
 
-      if (mode === "GIRLS") {
-        return gender === "FEMALE" ? 0 : 999;
+      return a.tatamiNumber - b.tatamiNumber;
+    })[0];
+  }
+
+  // ==========================================================
+  // ASSIGN COMPLETE CATEGORY
+  // ==========================================================
+
+  target.categories.push(category);
+
+  target.poolCount += categoryPoolCount;
+}
+
+  // ============================================================
+  // 9. SORT CATEGORIES INSIDE EACH TATAMI
+  //
+  // This guarantees:
+  //
+  // 6 years
+  // 7 years
+  // 8 years
+  // 9 years
+  // ...
+  //
+  // regardless of how the balancing algorithm assigned them.
+  // ============================================================
+
+  for (const load of loads) {
+    load.categories.sort((a, b) => {
+      if (a.minAge !== b.minAge) {
+        return a.minAge - b.minAge;
       }
 
-      // MIX
-      return 0;
-    };
-
-    const sortedPools = [...pools].sort((a, b) => {
-      const genderA = getGenderOrder(a.category.gender);
-      const genderB = getGenderOrder(b.category.gender);
-
-      if (genderA !== genderB) {
-        return genderA - genderB;
-      }
-
-      // Senior first = higher age categories first
-      // Junior first = lower age categories first
-      if (sequence === "SENIOR_FIRST") {
-        if (a.category.maxAge !== b.category.maxAge) {
-          return b.category.maxAge - a.category.maxAge;
-        }
-
-        if (a.category.minAge !== b.category.minAge) {
-          return b.category.minAge - a.category.minAge;
-        }
-      } else {
-        if (a.category.minAge !== b.category.minAge) {
-          return a.category.minAge - b.category.minAge;
-        }
-
-        if (a.category.maxAge !== b.category.maxAge) {
-          return a.category.maxAge - b.category.maxAge;
-        }
+      if (a.maxAge !== b.maxAge) {
+        return a.maxAge - b.maxAge;
       }
 
       return a.name.localeCompare(b.name);
     });
-
-    // ----------------------------------------------------------
-    // 5. Assign pools sequentially
-    //
-    // Example:
-    //
-    // Pool 1 -> Tatami 1
-    // Pool 2 -> Tatami 2
-    // Pool 3 -> Tatami 3
-    // Pool 4 -> Tatami 1
-    // ...
-    // ----------------------------------------------------------
-    const assignments = sortedPools.map((pool, index) => {
-      const tatami = tatamis[index % tatamis.length];
-
-      const poolPlayer =
-  pool.matches?.find((match) => match.playerA)?.playerA ||
-  pool.matches?.find((match) => match.playerB)?.playerB;
-
-const playerWeight = poolPlayer?.weight
-  ? Number(poolPlayer.weight)
-  : null;
-
-const weightCategory = pool.category.weights?.find((weight) => {
-  if (playerWeight === null || Number.isNaN(playerWeight)) {
-    return false;
   }
 
-  return (
-    playerWeight >= Number(weight.minWeight) &&
-    playerWeight <= Number(weight.maxWeight)
+  // Restore Tatami number order.
+  loads.sort(
+    (a, b) =>
+      a.tatamiNumber -
+      b.tatamiNumber,
   );
-});
 
-return {
-  poolId: pool.id,
-  poolName: pool.name,
-  categoryId: pool.categoryId,
-  categoryName: pool.category.name,
-  gender: pool.category.gender,
+  // ============================================================
+  // 10. CLEAR OLD CATEGORY ASSIGNMENTS
+  // ============================================================
 
-  minAge: pool.category.minAge,
-  maxAge: pool.category.maxAge,
+  await this.prisma.category.updateMany({
+    where: {
+      tournamentId,
+    },
+    data: {
+      tatamiId: null,
+    },
+  });
 
-  minWeight: weightCategory
-    ? Number(weightCategory.minWeight)
-    : null,
-
-  maxWeight: weightCategory
-    ? Number(weightCategory.maxWeight)
-    : null,
-
-  tatamiId: tatami.id,
-  tatamiNumber: tatami.number,
-};
-    });
-
-    // ----------------------------------------------------------
-    // 6. Save every assignment in a transaction
-    // ----------------------------------------------------------
-    await this.prisma.$transaction(
-      assignments.map((assignment) =>
-        this.prisma.pool.update({
-          where: {
-            id: assignment.poolId,
-          },
-          data: {
-            tatamiId: assignment.tatamiId,
-          },
-        }),
-      ),
-    );
-
-    // ----------------------------------------------------------
-    // 7. Verify that EVERY pool was assigned
-    // ----------------------------------------------------------
-    const assignedPools = await this.prisma.pool.count({
-      where: {
-        category: {
-          tournamentId,
-        },
-        tatamiId: {
-          not: null,
-        },
+  // Old pool-level assignments are no longer used.
+  await this.prisma.pool.updateMany({
+    where: {
+      category: {
+        tournamentId,
       },
+    },
+    data: {
+      tatamiId: null,
+    },
+  });
+
+  // ============================================================
+  // 11. SAVE CATEGORY ASSIGNMENTS
+  // ============================================================
+
+  const assignments: any[] = [];
+
+  for (const load of loads) {
+    for (const category of load.categories) {
+      await this.prisma.category.update({
+        where: {
+          id: category.id,
+        },
+        data: {
+          tatamiId: load.tatamiId,
+        },
+      });
+
+      assignments.push({
+        categoryId: category.id,
+        categoryName: category.name,
+
+        tatamiId: load.tatamiId,
+        tatamiNumber: load.tatamiNumber,
+
+        gender: category.gender,
+
+        minAge: category.minAge,
+        maxAge: category.maxAge,
+
+        totalPools:
+          category.pools?.length || 0,
+
+        pools: category.pools || [],
+      });
+    }
+  }
+
+  // ============================================================
+  // 12. RETURN RESULT
+  // ============================================================
+
+  return {
+    message:
+      "Categories assigned to Tatamis successfully",
+
+    tournamentId,
+
+    mode,
+
+    sequence: "JUNIOR_FIRST",
+
+    totalPools,
+
+    totalTatamis: tatamis.length,
+
+    assignments,
+
+    tatamiLoads: loads.map(
+      (load) => ({
+        tatamiId: load.tatamiId,
+        tatamiNumber:
+          load.tatamiNumber,
+        totalPools:
+          load.poolCount,
+      }),
+    ),
+  };
+}
+  
+  async deleteTatami(id: string) {
+  const tatami = await this.prisma.tatami.findUnique({
+    where: { id },
+  });
+
+  if (!tatami) {
+    throw new BadRequestException("Tatami not found");
+  }
+
+  const tournamentId = tatami.tournamentId;
+
+  await this.prisma.$transaction(async (tx) => {
+    // 1. Delete the selected Tatami
+    await tx.tatami.delete({
+      where: { id },
     });
 
-    if (assignedPools !== pools.length) {
-      throw new BadRequestException(
-        `Pool assignment incomplete. ${assignedPools} of ${pools.length} pools were assigned.`,
-      );
+    // 2. Get remaining Tatamis in correct order
+    const remainingTatamis = await tx.tatami.findMany({
+      where: { tournamentId },
+      orderBy: { number: "asc" },
+    });
+
+    // 3. Temporarily move numbers to avoid unique constraint conflicts
+    for (let i = 0; i < remainingTatamis.length; i++) {
+      await tx.tatami.update({
+        where: { id: remainingTatamis[i].id },
+        data: {
+          number: -(i + 1),
+          username: `TEMP_TATAMI_${i + 1}`,
+        },
+      });
     }
 
-    // ----------------------------------------------------------
-    // 8. Return assignment result
-    // ----------------------------------------------------------
-    return {
-      message: "Pools assigned to Tatamis successfully",
+    // 4. Renumber from 1, 2, 3...
+    for (let i = 0; i < remainingTatamis.length; i++) {
+      const newNumber = i + 1;
 
-      tournamentId,
+      await tx.tatami.update({
+        where: { id: remainingTatamis[i].id },
+        data: {
+          number: newNumber,
+          username: `TATAMI_${newNumber}`,
+        },
+      });
+    }
+  });
 
-      mode,
+  return {
+    message: `Tatami ${tatami.number} deleted and remaining Tatamis renumbered successfully`,
+  };
+}
+  // ============================================================
+  // MANUAL ASSIGN SINGLE POOL TO TATAMI
+  // ============================================================
+  async assignCategoryManually(
+  categoryId: string,
+  tatamiId: string,
+) {
+  const category = await this.prisma.category.findUnique({
+    where: {
+      id: categoryId,
+    },
+  });
 
-      sequence,
-
-      totalPools: pools.length,
-
-      totalTatamis: tatamis.length,
-
-      assignments,
-    };
+  if (!category) {
+    throw new BadRequestException("Category not found");
   }
-  
-  async deleteTatami(tatamiId: string) {
+
   const tatami = await this.prisma.tatami.findUnique({
     where: {
       id: tatamiId,
@@ -386,29 +532,41 @@ return {
   });
 
   if (!tatami) {
+    throw new BadRequestException("Tatami not found");
+  }
+
+  if (category.tournamentId !== tatami.tournamentId) {
     throw new BadRequestException(
-      "Tatami not found",
+      "Category and Tatami belong to different tournaments",
     );
   }
 
-  // Remove Tatami assignment from pools first
+  // Remove category from its previous Tatami
+  await this.prisma.category.update({
+    where: {
+      id: categoryId,
+    },
+    data: {
+      tatamiId,
+    },
+  });
+
+  // Clear old pool-level assignment for this category
   await this.prisma.pool.updateMany({
     where: {
-      tatamiId,
+      categoryId,
     },
     data: {
       tatamiId: null,
     },
   });
 
-  await this.prisma.tatami.delete({
-    where: {
-      id: tatamiId,
-    },
-  });
-
   return {
-    message: `Tatami ${tatami.number} deleted successfully`,
+    message: `${category.name} assigned to Tatami ${tatami.number} successfully`,
+    categoryId: category.id,
+    categoryName: category.name,
+    tatamiId: tatami.id,
+    tatamiNumber: tatami.number,
   };
 }
 }

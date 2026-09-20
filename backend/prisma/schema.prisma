@@ -118,7 +118,7 @@
   player    Player @relation(fields:[playerId], references:[id], onDelete:Cascade)
 }
 
-  model Category {
+model Category {
   id             String           @id @default(uuid())
   name           String
   level          String
@@ -128,17 +128,17 @@
   tournamentId   String
   playersPerPool Int
   type           CategoryType
-
-  // NEW
-  sortByBelt     Boolean @default(false)
-
-  createdAt      DateTime @default(now())
+  sortByBelt     Boolean          @default(false)
+  createdAt      DateTime         @default(now())
 
   tournament     Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
 
   weights        CategoryWeight[]
-
   pools          Pool[]
+
+  // NEW: category is assigned to a Tatami
+  tatamiId       String?
+  tatami         Tatami? @relation(fields: [tatamiId], references: [id], onDelete: SetNull)
 
   @@map("categories")
 }
@@ -248,8 +248,9 @@
 
   tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
 
-  // NEW
   pools        Pool[]
+
+  categories   Category[]
 
   @@unique([number, tournamentId], map: "tatamis_unique_per_tournament")
   @@unique([username, tournamentId])
