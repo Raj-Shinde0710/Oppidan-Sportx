@@ -240,14 +240,28 @@ try {
 console.log(JSON.stringify(data, null, 2));
 
 
-      const sortedGroupEntries = Object.entries<any>(data.groups);
+      const sortedGroupEntries = this.sortGroupEntries(
+        Object.entries<any>(data.groups),
+        category.type,
+      );
+
+      let poolIndex = 1;
 
       for (const [groupKey, group] of sortedGroupEntries) {
         if (!group.pools) continue;
 
         const normalizedGroupKey = groupKey.replace(/\s+/g, " ").trim();
 
-        for (const [poolName, poolData] of Object.entries<any>(group.pools)) {
+        const sortedPoolEntries = Object.entries<any>(group.pools).sort(
+          ([a], [b]) => {
+            const numA = parseInt(a.replace(/\D/g, ""), 10) || 0;
+            const numB = parseInt(b.replace(/\D/g, ""), 10) || 0;
+            return numA - numB;
+          },
+        );
+
+        for (const [, poolData] of sortedPoolEntries) {
+          const poolName = `POOL_${poolIndex++}`;
           // =====================================================
           // 🥋 KATA HANDLING (POOLING ONLY — NO SCORES)
           // =====================================================
@@ -572,7 +586,14 @@ console.log(JSON.stringify(data, null, 2));
 
   const output = { groups: {} as any };
 
-  for (const [groupKey, players] of Object.entries(groups)) {
+  const sortedGroupEntries = this.sortGroupEntries(
+    Object.entries(groups),
+    payload.eventType,
+  );
+
+  let poolIndex = 1;
+
+  for (const [groupKey, players] of sortedGroupEntries) {
     output.groups[groupKey] = {
       pools: {},
     };
@@ -580,7 +601,7 @@ console.log(JSON.stringify(data, null, 2));
     for (let i = 0; i < players.length; i += playersPerPool) {
       const poolPlayers = players.slice(i, i + playersPerPool);
 
-      const poolName = `POOL_${Math.floor(i / playersPerPool) + 1}`;
+      const poolName = `POOL_${poolIndex++}`;
 
       // ==========================================
       // KATA
@@ -692,5 +713,125 @@ console.log(JSON.stringify(data, null, 2));
     }
 
     return "BEGINNER";
+  }
+
+  private extractLowerWeight(weightStr: string): number {
+    if (!weightStr || typeof weightStr !== "string") {
+      return Number.POSITIVE_INFINITY;
+    }
+    const clean = weightStr.trim().replace(/[–—]/g, "-");
+
+    // Match "21-25", "21 - 25", "21.5-25.5", "21-25 kg", etc.
+    const rangeMatch = clean.match(
+      /^([0-9]+(?:\.[0-9]+)?)\s*-\s*([0-9]+(?:\.[0-9]+)?)/,
+    );
+    if (rangeMatch) {
+      const val = parseFloat(rangeMatch[1]);
+      return isNaN(val) ? Number.POSITIVE_INFINITY : val;
+    }
+
+    // Match "+80", ">80", "80+"
+    const plusMatch = clean.match(
+      /(?:\+|>=?|>)\s*([0-9]+(?:\.[0-9]+)?)|([0-9]+(?:\.[0-9]+)?)\s*\+/,
+    );
+    if (plusMatch) {
+      const val = parseFloat(plusMatch[1] || plusMatch[2]);
+      return isNaN(val) ? Number.POSITIVE_INFINITY : val;
+    }
+
+    // Match "-60", "<60", "<=60" (meaning under 60 kg)
+    const underMatch = clean.match(/^(?:-|<|<=)\s*([0-9]+(?:\.[0-9]+)?)/);
+    if (underMatch) {
+      return 0;
+    }
+
+    // Match any standalone number
+    const numMatch = clean.match(/([0-9]+(?:\.[0-9]+)?)/);
+    if (numMatch) {
+      const val = parseFloat(numMatch[1]);
+      return isNaN(val) ? Number.POSITIVE_INFINITY : val;
+    }
+
+    return Number.POSITIVE_INFINITY;
+  }
+
+  private extractUpperWeight(weightStr: string): number {
+    if (!weightStr || typeof weightStr !== "string") {
+      return Number.POSITIVE_INFINITY;
+    }
+    const clean = weightStr.trim().replace(/[–—]/g, "-");
+
+    const rangeMatch = clean.match(
+      /^([0-9]+(?:\.[0-9]+)?)\s*-\s*([0-9]+(?:\.[0-9]+)?)/,
+    );
+    if (rangeMatch) {
+      const val = parseFloat(rangeMatch[2]);
+      return isNaN(val) ? Number.POSITIVE_INFINITY : val;
+    }
+
+    const underMatch = clean.match(/^(?:-|<|<=)\s*([0-9]+(?:\.[0-9]+)?)/);
+    if (underMatch) {
+      const val = parseFloat(underMatch[1]);
+      return isNaN(val) ? Number.POSITIVE_INFINITY : val;
+    }
+
+    return this.extractLowerWeight(weightStr);
+  }
+
+  private sortGroupEntries<T>(
+    entries: [string, T][],
+    eventType: string,
+  ): [string, T][] {
+    if (eventType === "KATA") {
+      return entries;
+    }
+
+    const prefixFirstSeen = new Map<string, number>();
+    entries.forEach(([key], index) => {
+      const parts = key.split("|").map((s) => s.trim());
+      const prefix = parts.length > 1 ? parts.slice(0, -1).join(" | ") : key;
+      if (!prefixFirstSeen.has(prefix)) {
+        prefixFirstSeen.set(prefix, index);
+      }
+    });
+
+    return [...entries].sort(([keyA], [keyB]) => {
+      const partsA = keyA.split("|").map((s) => s.trim());
+      const partsB = keyB.split("|").map((s) => s.trim());
+
+      if (partsA.length <= 1 || partsB.length <= 1) {
+        return 0;
+      }
+
+      const prefixA = partsA.slice(0, -1).join(" | ");
+      const prefixB = partsB.slice(0, -1).join(" | ");
+
+      // Preserve non-weight grouping order (gender, belt, age)
+      if (prefixA !== prefixB) {
+        return (
+          (prefixFirstSeen.get(prefixA) ?? 0) -
+          (prefixFirstSeen.get(prefixB) ?? 0)
+        );
+      }
+
+      const weightA = partsA[partsA.length - 1];
+      const weightB = partsB[partsB.length - 1];
+
+      const lowerA = this.extractLowerWeight(weightA);
+      const lowerB = this.extractLowerWeight(weightB);
+
+      if (lowerA !== lowerB) {
+        return lowerA - lowerB;
+      }
+
+      const upperA = this.extractUpperWeight(weightA);
+      const upperB = this.extractUpperWeight(weightB);
+
+      if (upperA !== upperB) {
+        return upperA - upperB;
+      }
+
+      return weightA.localeCompare(weightB);
+    });
   }
 }

@@ -92,6 +92,7 @@
     kataScores   KataScore[]
     matchesA     Match[]             @relation("PlayerA")
     matchesB     Match[]             @relation("PlayerB")
+    matchesWon   Match[]             @relation("MatchWinner")
     coach        Coach?              @relation(fields: [coachId], references: [userId], onDelete: Cascade)
     tournament   Tournament          @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
 
@@ -171,17 +172,34 @@ model Category {
 }
 
   model Match {
-    id        String         @id @default(uuid())
-    poolId    String
-    tatami    Int
-    round     Int
-    playerAId String
-    playerBId String
-    referees  MatchReferee[]
-    playerA   Player         @relation("PlayerA", fields: [playerAId], references: [id])
-    playerB   Player         @relation("PlayerB", fields: [playerBId], references: [id])
-    pool      Pool           @relation(fields: [poolId], references: [id], onDelete: Cascade)
-    scoreCard ScoreCard?
+    id              String         @id @default(uuid())
+    poolId          String
+    tatami          Int
+    round           Int
+    status          MatchStatus    @default(PENDING)
+
+    playerAId       String
+    playerBId       String
+    playerA         Player         @relation("PlayerA", fields: [playerAId], references: [id])
+    playerB         Player         @relation("PlayerB", fields: [playerBId], references: [id])
+
+    winnerId        String?
+    winner          Player?        @relation("MatchWinner", fields: [winnerId], references: [id], onDelete: SetNull)
+
+    startedAt       DateTime?
+    completedAt     DateTime?
+    durationSeconds Int?
+
+    scoreA          Int            @default(0)
+    scoreB          Int            @default(0)
+
+    nextMatchId     String?
+    nextMatch       Match?         @relation("MatchProgression", fields: [nextMatchId], references: [id], onDelete: SetNull)
+    previousMatches Match[]        @relation("MatchProgression")
+
+    referees        MatchReferee[]
+    pool            Pool           @relation(fields: [poolId], references: [id], onDelete: Cascade)
+    scoreCard       ScoreCard?
 
     @@map("matches")
   }
@@ -308,4 +326,10 @@ model Category {
   enum CategoryType {
     KATA
     KUMITE
+  }
+
+  enum MatchStatus {
+    PENDING
+    LIVE
+    COMPLETED
   }

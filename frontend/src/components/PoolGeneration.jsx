@@ -34,8 +34,10 @@ const TournamentPoolTree = () => {
 
   const [openCategoryIndex, setOpenCategoryIndex] = useState(null);
   const [activePool, setActivePool] = useState(null);
+  const [activeCategory, setActiveCategory] = useState(null);
   const [rounds, setRounds] = useState([]);
   const [kataPlayers, setKataPlayers] = useState(null);
+  const [poolWinner, setPoolWinner] = useState(null);
 
   /* ============================================================
      🔹 FETCH TOURNAMENTS ON PAGE LOAD
@@ -48,6 +50,21 @@ const TournamentPoolTree = () => {
     }
     loadTournaments();
   }, []);
+
+  /* ============================================================
+     🔹 AUTO-LOAD EXISTING POOL DATA WHEN TOURNAMENT SELECTED
+     ============================================================ */
+  useEffect(() => {
+    if (!tournamentId) return;
+    getPoolData(tournamentId)
+      .then((data) => {
+        if (data?.categories?.length > 0) {
+          setCategories(data.categories);
+          setGenerated(true);
+        }
+      })
+      .catch(() => {});
+  }, [tournamentId]);
 
 
   /* ============================================================
@@ -80,24 +97,82 @@ const TournamentPoolTree = () => {
 
 
   /* ============================================================
-     🔹 CORE BRACKET LOGIC (UNCHANGED)
-     🔹 Supports 2 / 4 / 8 / 16 / 32 players dynamically
+     🔹 HELPER: GET WINNER NAME FROM DATABASE WINNER ID
      ============================================================ */
+  const getMatchWinnerName = (match, categoryType) => {
+    if (!match) return null;
 
-  const generateBracket = (players) => {
-    if (!players || players.length === 0) {
+    // Kumite BYE handling:
+    if (
+      categoryType === "KUMITE" &&
+      match.playerAId &&
+      match.playerBId &&
+      match.playerAId === match.playerBId
+    ) {
+      return match.playerA?.name || null;
+    }
+
+    // Database winnerId check (never from scores):
+    if (!match.winnerId) return null;
+
+    if (match.winnerId === match.playerAId) {
+      return match.playerA?.name || null;
+    }
+    if (match.winnerId === match.playerBId) {
+      return match.playerB?.name || null;
+    }
+
+    return null;
+  };
+
+  /* ============================================================
+     🔹 BUILD BRACKET FROM BACKEND MATCH DATA WITH DYNAMIC WINNERS
+     ============================================================ */
+  const buildBracketFromPool = (pool, category) => {
+    const categoryType = category?.type || "KUMITE";
+    const poolMatches = pool?.matches || [];
+
+    // Sort Round 1 matches deterministically
+    const round1Matches = poolMatches
+      .filter((m) => m.round === 1)
+      .sort((a, b) => {
+        if (a.createdAt && b.createdAt && a.createdAt !== b.createdAt) {
+          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        }
+        return a.id.localeCompare(b.id);
+      });
+
+    // Extract Round 1 players
+    const paddedPlayers = [];
+    if (round1Matches.length > 0) {
+      round1Matches.forEach((m) => {
+        paddedPlayers.push(m.playerA?.name || "Player");
+        if (m.playerAId === m.playerBId && categoryType === "KUMITE") {
+          paddedPlayers.push("BYE");
+        } else {
+          paddedPlayers.push(m.playerB?.name || "Player");
+        }
+      });
+    } else {
+      const players = new Set();
+      poolMatches.forEach((match) => {
+        if (match.playerA?.name) players.add(match.playerA.name);
+        if (match.playerB?.name) players.add(match.playerB.name);
+      });
+      paddedPlayers.push(...Array.from(players));
+    }
+
+    if (paddedPlayers.length === 0) {
       setRounds([]);
+      setPoolWinner(null);
       return;
     }
 
-    // Ensure power of 2, at least 2 slots
     const nextPowerOfTwo = Math.max(
       2,
-      Math.pow(2, Math.ceil(Math.log2(players.length)))
+      Math.pow(2, Math.ceil(Math.log2(paddedPlayers.length)))
     );
 
-    // Pad players with BYE
-    const paddedPlayers = [...players];
     while (paddedPlayers.length < nextPowerOfTwo) {
       paddedPlayers.push("BYE");
     }
@@ -105,22 +180,68 @@ const TournamentPoolTree = () => {
     const totalRounds = Math.log2(nextPowerOfTwo);
     const bracketRounds = [];
 
+    // Determine winners for Round 1
+    const round1Winners = round1Matches.map((m) =>
+      getMatchWinnerName(m, categoryType)
+    );
+
+    // Group subsequent matches by round
+    const subsequentMatchesByRound = {};
+    poolMatches.forEach((m) => {
+      if (m.round > 1) {
+        if (!subsequentMatchesByRound[m.round]) {
+          subsequentMatchesByRound[m.round] = [];
+        }
+        subsequentMatchesByRound[m.round].push(m);
+      }
+    });
+
+    Object.keys(subsequentMatchesByRound).forEach((rKey) => {
+      subsequentMatchesByRound[rKey].sort((a, b) => {
+        if (a.createdAt && b.createdAt && a.createdAt !== b.createdAt) {
+          return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        }
+        return a.id.localeCompare(b.id);
+      });
+    });
+
     let matchCount = nextPowerOfTwo / 2;
+    let previousRoundWinners = round1Winners;
 
     for (let r = 0; r < totalRounds; r++) {
       const seeds = [];
+      const currentRoundWinners = [];
 
       for (let m = 0; m < matchCount; m++) {
+        let pA = "TBD";
+        let pB = "TBD";
+
+        if (r === 0) {
+          pA = paddedPlayers[m * 2];
+          pB = paddedPlayers[m * 2 + 1];
+        } else {
+          // Replace TBD with feeder match winners
+          pA = previousRoundWinners[m * 2] || "TBD";
+          pB = previousRoundWinners[m * 2 + 1] || "TBD";
+        }
+
         seeds.push({
           id: `${r}-${m}`,
-          players:
-            r === 0
-              ? [
-                  paddedPlayers[m * 2],
-                  paddedPlayers[m * 2 + 1],
-                ]
-              : ["TBD", "TBD"],
+          players: [pA, pB],
         });
+
+        // Determine winner of this match from DB
+        let currentMatchWinner = null;
+        if (r === 0) {
+          currentMatchWinner = round1Winners[m] || null;
+        } else {
+          const dbRoundMatches = subsequentMatchesByRound[r + 1] || [];
+          const dbMatch = dbRoundMatches[m] || null;
+          if (dbMatch) {
+            currentMatchWinner = getMatchWinnerName(dbMatch, categoryType);
+          }
+        }
+        currentRoundWinners.push(currentMatchWinner);
       }
 
       bracketRounds.push({
@@ -129,26 +250,30 @@ const TournamentPoolTree = () => {
       });
 
       matchCount = matchCount / 2;
+      previousRoundWinners = currentRoundWinners;
     }
 
     setRounds(bracketRounds);
-  };
 
+    // Final winner: the winner of the final round
+    const finalWinner = previousRoundWinners[0] || null;
+    setPoolWinner(finalWinner);
+  };
 
   /* ============================================================
-     🔹 BUILD PLAYER LIST FROM BACKEND MATCH DATA
+     🔹 AUTO-UPDATE BRACKET WHEN CATEGORIES OR ACTIVE POOL REFRESHES
      ============================================================ */
-
-  const buildBracketFromPool = (pool) => {
-    const players = new Set();
-
-    pool.matches?.forEach((match) => {
-      if (match.playerA?.name) players.add(match.playerA.name);
-      if (match.playerB?.name) players.add(match.playerB.name);
-    });
-
-    generateBracket(Array.from(players));
-  };
+  useEffect(() => {
+    if (!activePool || !categories.length) return;
+    for (const cat of categories) {
+      if (cat.type === "KATA") continue;
+      const foundPool = cat.pools?.find((p) => p.id === activePool);
+      if (foundPool) {
+        buildBracketFromPool(foundPool, cat);
+        break;
+      }
+    }
+  }, [categories, activePool]);
 
 
   /* ============================================================
@@ -245,6 +370,7 @@ const TournamentPoolTree = () => {
                   setActivePool(null);
                   setRounds([]);
                   setKataPlayers(null);
+                  setPoolWinner(null);
                 }}
                 className="flex justify-between items-center px-6 py-4 cursor-pointer"
               >
@@ -275,6 +401,7 @@ const TournamentPoolTree = () => {
                               setActivePool(pool.id);
                               setRounds([]);
                               setKataPlayers(null);
+                              setPoolWinner(null);
                             // 🆕 KATA ONLY: show player list instead of bracket
                               if (category.type === "KATA") {
                                 const players = new Set();
@@ -285,7 +412,7 @@ const TournamentPoolTree = () => {
                                 setKataPlayers(Array.from(players));
                               } 
                              else {
-                              buildBracketFromPool(pool); // Kumite bracket view
+                              buildBracketFromPool(pool, category); // Kumite bracket view
                             }
                             }}
                             className="mt-2 text-sm text-slate-600 cursor-pointer hover:text-[#3f4191]"
@@ -349,6 +476,11 @@ const TournamentPoolTree = () => {
                                     <span className="text-[#1e266d] font-black uppercase tracking-[0.2em] text-xl">
                                       Winner
                                     </span>
+                                    {poolWinner && (
+                                      <span className="text-[#1e266d] font-bold text-base text-center px-4 -mt-3">
+                                        {poolWinner}
+                                      </span>
+                                    )}
                                   </motion.div>
                                 </div>
 

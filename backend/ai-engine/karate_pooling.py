@@ -1,4 +1,5 @@
 import random
+import re
 from collections import defaultdict
 
 BELT_LEVELS = {
@@ -70,6 +71,87 @@ def get_weight_group_from_policy(weight, policy_categories):
             return f"{int(low)}-{int(high)}"
 
     return "UNASSIGNED"
+
+
+def extract_lower_weight(weight_str):
+    if not weight_str or not isinstance(weight_str, str):
+        return float('inf')
+    clean = re.sub(r'[–—]', '-', weight_str.strip())
+
+    range_match = re.match(r'^([0-9]+(?:\.[0-9]+)?)\s*-\s*([0-9]+(?:\.[0-9]+)?)', clean)
+    if range_match:
+        try:
+            return float(range_match.group(1))
+        except ValueError:
+            return float('inf')
+
+    plus_match = re.search(r'(?:\+|>=?|>)\s*([0-9]+(?:\.[0-9]+)?)|([0-9]+(?:\.[0-9]+)?)\s*\+', clean)
+    if plus_match:
+        try:
+            val = plus_match.group(1) or plus_match.group(2)
+            return float(val)
+        except ValueError:
+            return float('inf')
+
+    under_match = re.match(r'^(?:-|<|<=)\s*([0-9]+(?:\.[0-9]+)?)', clean)
+    if under_match:
+        return 0.0
+
+    num_match = re.search(r'([0-9]+(?:\.[0-9]+)?)', clean)
+    if num_match:
+        try:
+            return float(num_match.group(1))
+        except ValueError:
+            return float('inf')
+
+    return float('inf')
+
+
+def extract_upper_weight(weight_str):
+    if not weight_str or not isinstance(weight_str, str):
+        return float('inf')
+    clean = re.sub(r'[–—]', '-', weight_str.strip())
+
+    range_match = re.match(r'^([0-9]+(?:\.[0-9]+)?)\s*-\s*([0-9]+(?:\.[0-9]+)?)', clean)
+    if range_match:
+        try:
+            return float(range_match.group(2))
+        except ValueError:
+            return float('inf')
+
+    under_match = re.match(r'^(?:-|<|<=)\s*([0-9]+(?:\.[0-9]+)?)', clean)
+    if under_match:
+        try:
+            return float(under_match.group(1))
+        except ValueError:
+            return float('inf')
+
+    return extract_lower_weight(weight_str)
+
+
+def sort_group_keys(keys, eventType="KUMITE"):
+    if eventType == "KATA":
+        return list(keys)
+
+    prefix_first_seen = {}
+    for idx, key in enumerate(keys):
+        parts = [s.strip() for s in key.split("|")]
+        prefix = " | ".join(parts[:-1]) if len(parts) > 1 else key
+        if prefix not in prefix_first_seen:
+            prefix_first_seen[prefix] = idx
+
+    def sort_key(k):
+        parts = [s.strip() for s in k.split("|")]
+        if len(parts) <= 1:
+            return (0, 0, 0, k)
+        prefix = " | ".join(parts[:-1])
+        prefix_order = prefix_first_seen.get(prefix, 0)
+        weight_str = parts[-1]
+        lower = extract_lower_weight(weight_str)
+        upper = extract_upper_weight(weight_str)
+        return (prefix_order, lower, upper, weight_str)
+
+    return sorted(keys, key=sort_key)
 
 
 def generate_referees(n):
@@ -384,7 +466,11 @@ def generate_pools(
     output = {"groups": {}}
     tatami = 1
 
-    for key, plist in grouped.items():
+    sorted_keys = sort_group_keys(list(grouped.keys()), eventType=eventType)
+    pool_index = 1
+
+    for key in sorted_keys:
+        plist = grouped[key]
         # -----------------------------------
         # RANDOM MODE
         # -----------------------------------
@@ -409,8 +495,9 @@ def generate_pools(
             players_per_pool,
         )
 
-        for idx, pool_players in enumerate(pools, start=1):
-            pool_name = f"POOL_{idx}"
+        for pool_players in pools:
+            pool_name = f"POOL_{pool_index}"
+            pool_index += 1
 
             # ----------------------------
             # KATA

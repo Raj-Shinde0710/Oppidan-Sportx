@@ -14,6 +14,11 @@ import ViewResults from "./components/ViewResults";
 import TournamentDetails from "./pages/TournamentDetails";
 import KaratePolicy from "./components/KaratePolicy";
 import GenerateID from "./components/GenerateID";
+import TatamiLogin from "./pages/TatamiLogin";
+import TatamiProtectedRoute from "./components/TatamiProtectedRoute";
+import TatamiDashboardShell from "./components/TatamiDashboardShell";
+import TatamiMatchControl from "./pages/TatamiMatchControl";
+import TatamiExternalDisplay from "./pages/TatamiExternalDisplay";
 
 export default function App() {
   return (
@@ -34,8 +39,53 @@ export default function App() {
         <Route path="/view-results" element={<ViewResults />} />
         <Route path="/tournament/:id" element={<TournamentDetails />} />
         <Route path="/generate-id" element={<GenerateID/>}/>
+
+        {/* 🥋 TATAMI ARENA ROUTES */}
+        <Route path="/tatami/login" element={<TatamiLogin />} />
+        <Route
+          path="/tatami/dashboard"
+          element={
+            <TatamiProtectedRoute>
+              <TatamiDashboardShell />
+            </TatamiProtectedRoute>
+          }
+        />
+        <Route
+          path="/tatami/matches/:matchId"
+          element={
+            <TatamiProtectedRoute>
+              <TatamiMatchControl />
+            </TatamiProtectedRoute>
+          }
+        />
+        <Route
+          path="/tatami/matches/:matchId/display"
+          element={
+            <TatamiProtectedRoute>
+              <TatamiExternalDisplay />
+            </TatamiProtectedRoute>
+          }
+        />
+        {/* 📺 PERSISTENT TATAMI-LEVEL EXTERNAL DISPLAY */}
+        <Route
+          path="/tatami/display/:tatamiId"
+          element={
+            <TatamiProtectedRoute>
+              <TatamiExternalDisplay />
+            </TatamiProtectedRoute>
+          }
+        />
+        <Route
+          path="/tatami/display"
+          element={
+            <TatamiProtectedRoute>
+              <TatamiExternalDisplay />
+            </TatamiProtectedRoute>
+          }
+        />
       </Routes>
     </BrowserRouter>
   );
 }
+
   
